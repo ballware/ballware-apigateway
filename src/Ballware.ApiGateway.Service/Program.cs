@@ -1,4 +1,3 @@
-
 using Ballware.ApiGateway.Service.Configuration;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
@@ -87,9 +86,10 @@ var ocelotConfig = new FileConfiguration
     }
 };
 
-builder.Configuration.AddOcelot(ocelotConfig, optional: true);
+builder.Configuration.AddOcelot(ocelotConfig, builder.Environment, MergeOcelotJson.ToMemory);
+builder.Services.AddOcelot(builder.Configuration);
 
-builder.Services.AddOcelot();
+
 
 var app = builder.Build();
 
