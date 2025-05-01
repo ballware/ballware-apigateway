@@ -87,7 +87,7 @@ var ocelotConfig = new FileConfiguration
     }
 };
 
-builder.Configuration.AddOcelot(ocelotConfig);
+builder.Configuration.AddOcelot(ocelotConfig, optional: true);
 
 builder.Services.AddOcelot();
 
