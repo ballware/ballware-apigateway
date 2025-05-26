@@ -18,22 +18,28 @@ jobs:
         uses: actions/checkout@v3
         with:
           fetch-depth: 0
+      - name: Extract PR Info
+        id: vars
+        run: |
+          PR_NUM=${{ github.event.pull_request.number }}
+          BRANCH_NAME=$(echo "${GITHUB_HEAD_REF}" | tr '/' '-')
+          echo "tag=${BRANCH_NAME}" >> $GITHUB_OUTPUT               
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v2
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
-      - name: Login to Azure Container Registry
-        uses: docker/login-action@v2
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
         with:
-          registry: ballware.azurecr.io
-          username: ${{ secrets.AZURE_USERNAME }}
-          password: ${{ secrets.AZURE_TOKEN }}      
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}      
       - name: Build and push
         uses: docker/build-push-action@v3
         with:
           context: src/.
           file: src/Ballware.ApiGateway.Service/Dockerfile
-          platforms: linux/amd64
+          platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            ballware.azurecr.io/ballware-apigateway-service:latest  
+            ghcr.io/ballware/ballware-meta-service:${{ steps.vars.outputs.tag }}
