@@ -17,13 +17,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v3
         with:
-          fetch-depth: 0
-      - name: Extract PR Info
-        id: vars
-        run: |
-          PR_NUM=${{ github.event.pull_request.number }}
-          BRANCH_NAME=$(echo "${GITHUB_HEAD_REF}" | tr '/' '-')
-          echo "tag=${BRANCH_NAME}" >> $GITHUB_OUTPUT               
+          fetch-depth: 0       
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v2
       - name: Set up Docker Buildx
@@ -42,4 +36,4 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            ghcr.io/ballware/ballware-meta-service:${{ steps.vars.outputs.tag }}
+            ghcr.io/ballware/ballware-apigateway-service:latest
