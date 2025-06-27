@@ -23,14 +23,7 @@ jobs:
       - name: Fetch GitVersion
         uses: gittools/actions/gitversion/execute@v0
         with:
-          useConfigFile: true
-      - name: Pack NuGet packages
-        run: |
-          dotnet restore ballware-apigateway.sln
-          dotnet pack ballware-apigateway.sln -p:Version=${{ env.GitVersion_SemVer }} --configuration Release --output ./nupkgs
-      - name: Publish NuGet packages to GitHub Packages
-        run: |
-          dotnet nuget push ./nupkgs/*.nupkg --source https://nuget.pkg.github.com/ballware/index.json --api-key ${{ secrets.GITHUB_TOKEN }} --skip-duplicate
+          useConfigFile: true      
       - name: Create version tag on release
         if: github.ref == 'refs/heads/main'
         run: |
