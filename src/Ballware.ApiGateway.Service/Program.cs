@@ -1,9 +1,9 @@
 using Ballware.ApiGateway.Service.Configuration;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
-using Ocelot.Configuration.File;
-using Ocelot.DependencyInjection;
-using Ocelot.Middleware;
+using Microsoft.IdentityModel.Logging;
+using Microsoft.IdentityModel.Tokens;
+using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -13,6 +13,11 @@ builder.Configuration.AddJsonFile("appsettings.json", optional: false, reloadOnC
 builder.Configuration.AddJsonFile($"appsettings.{environment.EnvironmentName}.json", true, false);
 builder.Configuration.AddJsonFile($"appsettings.local.json", true, false);
 builder.Configuration.AddEnvironmentVariables();
+
+builder.Host.UseSerilog((context, services, loggerConfiguration) => loggerConfiguration
+    .ReadFrom.Configuration(context.Configuration)
+    .ReadFrom.Services(services)
+    .Enrich.FromLogContext());
 
 AuthorizationOptions? authorizationOptions =
     builder.Configuration.GetSection("Authorization").Get<AuthorizationOptions>();
@@ -35,65 +40,82 @@ builder.Services.AddAuthentication(options =>
 }).AddJwtBearer(options =>
 {
     options.MapInboundClaims = false;
+    options.IncludeErrorDetails = true;
     options.Authority = authorizationOptions.Authority;
     options.Audience = authorizationOptions.Audience;
     options.RequireHttpsMetadata = authorizationOptions.RequireHttpsMetadata;
-    options.TokenValidationParameters = new Microsoft.IdentityModel.Tokens.TokenValidationParameters()
+    options.TokenValidationParameters = new TokenValidationParameters()
     {
-        ValidIssuer = authorizationOptions.Authority
+        ValidIssuer = authorizationOptions.Issuer ?? authorizationOptions.Authority
+    };
+    options.Events = new JwtBearerEvents
+    {
+        OnMessageReceived = context =>
+        {
+            var accessToken = context.Request.Query["access_token"];
+            var isWebSocketRequest = context.HttpContext.WebSockets.IsWebSocketRequest;
+            var acceptHeader = context.Request.Headers.Accept.ToString();
+            var isServerSentEventsRequest = acceptHeader.Contains("text/event-stream", StringComparison.OrdinalIgnoreCase);
+
+            if (!string.IsNullOrEmpty(accessToken) && (isWebSocketRequest || isServerSentEventsRequest))
+            {
+                context.Token = accessToken;
+            }
+
+            return Task.CompletedTask;
+        }
     };
 });
 
-var downstreamHostsSection = builder.Configuration.GetSection("DownstreamHosts");
-var downstreamHosts = downstreamHostsSection.GetChildren()
-    .ToDictionary(x => x.Key, x => new
+builder.Services.AddAuthorization(options =>
+{
+    options.FallbackPolicy = new Microsoft.AspNetCore.Authorization.AuthorizationPolicyBuilder()
+        .RequireAuthenticatedUser()
+        .Build();
+});
+
+builder.Services.AddCors(options =>
+{
+    var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? [];
+
+    options.AddDefaultPolicy(policy =>
     {
-        Host = x.GetValue<string>("Host"),
-        Port = x.GetValue<int>("Port"),
-        Scheme = x.GetValue<string>("Scheme"),
+        policy
+            .WithOrigins(allowedOrigins)
+            .AllowAnyHeader()
+            .AllowAnyMethod()
+            .AllowCredentials();
     });
+});
 
-var ocelotRoutesSection = builder.Configuration.GetSection("Ocelot:Routes");
-var updatedRoutes = new List<FileRoute>();
-
-foreach (var route in ocelotRoutesSection.GetChildren())
-{
-    var serviceKey = route.GetValue<string>("ServiceKey");
-    if (serviceKey != null && downstreamHosts.TryGetValue(serviceKey, out var downstreamHost))
-    {
-        var newRoute = route.Get<FileRoute>();
-
-        newRoute.DownstreamScheme = downstreamHost.Scheme;
-        newRoute.DownstreamHostAndPorts =
-        [
-            new FileHostAndPort
-            {
-                Host = downstreamHost.Host,
-                Port = downstreamHost.Port
-            }
-        ];
-        
-        updatedRoutes.Add(newRoute);
-    }
-}
-
-var ocelotConfig = new FileConfiguration
-{
-    Routes = updatedRoutes,
-    GlobalConfiguration = new FileGlobalConfiguration
-    {
-        //BaseUrl = builder.Configuration["Ocelot:GlobalConfiguration:BaseUrl"]
-    }
-};
-
-builder.Configuration.AddOcelot(ocelotConfig, builder.Environment, MergeOcelotJson.ToMemory);
-builder.Services.AddOcelot(builder.Configuration);
-
+builder.Services.AddReverseProxy()
+    .LoadFromConfig(builder.Configuration.GetSection("ReverseProxy"));
 
 
 var app = builder.Build();
 
+IdentityModelEventSource.ShowPII = environment.IsDevelopment();
+
+app.UseSerilogRequestLogging(options =>
+{
+    options.MessageTemplate = "HTTP {RequestMethod} {RequestPath} => {StatusCode} in {Elapsed:0.0000} ms";
+});
+
+app.UseCors();
+app.UseWebSockets();
+app.Use(async (context, next) =>
+{
+    if (HttpMethods.IsOptions(context.Request.Method))
+    {
+        context.Response.StatusCode = StatusCodes.Status204NoContent;
+        return;
+    }
+
+    await next();
+});
+app.UseAuthentication();
 app.UseAuthorization();
-await app.UseOcelot();
+app.MapGet("/_diag/ping", () => Results.Ok(new { Status = "ok" })).AllowAnonymous();
+app.MapReverseProxy();
 
 await app.RunAsync();
