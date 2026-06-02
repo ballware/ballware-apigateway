@@ -1,4 +1,5 @@
 using Ballware.ApiGateway.Service.Configuration;
+using Ballware.ApiGateway.Service.Transforms;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.IdentityModel.Logging;
@@ -89,7 +90,9 @@ builder.Services.AddCors(options =>
 });
 
 builder.Services.AddReverseProxy()
-    .LoadFromConfig(builder.Configuration.GetSection("ReverseProxy"));
+    .LoadFromConfig(builder.Configuration.GetSection("ReverseProxy"))
+    .AddTransformFactory<AuthorizationHeaderFromClaimTransformFactory>()
+    .AddTransformFactory<AuthorizationTokenToHeaderTransformFactory>();
 
 
 var app = builder.Build();
