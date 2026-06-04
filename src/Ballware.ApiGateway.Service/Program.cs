@@ -1,4 +1,5 @@
 using Ballware.ApiGateway.Service.Configuration;
+using Ballware.ApiGateway.Service.Middleware;
 using Ballware.ApiGateway.Service.Transforms;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
@@ -32,7 +33,30 @@ if (authorizationOptions == null)
     throw new ConfigurationException("Required configuration for authorization is missing");
 }
 
+var authorizationTokenHeaderRoutes = builder.Configuration
+    .GetSection("ReverseProxy:Routes")
+    .GetChildren()
+    .Select(routeSection =>
+    {
+        var path = routeSection.GetSection("Match").GetValue<string>("Path");
+        var headerName = routeSection.GetSection("Metadata").GetValue<string>("AuthorizationTokenHeader");
+
+        if (string.IsNullOrWhiteSpace(path) || string.IsNullOrWhiteSpace(headerName))
+        {
+            return null;
+        }
+
+        var pathPrefix = path.Split('{', 2)[0].TrimEnd('/');
+
+        return string.IsNullOrWhiteSpace(pathPrefix)
+            ? null
+            : new AuthorizationTokenHeaderRoute(new PathString(pathPrefix), headerName);
+    })
+    .OfType<AuthorizationTokenHeaderRoute>()
+    .ToArray();
+
 builder.Services.Configure<KestrelServerOptions>(builder.Configuration.GetSection("Kestrel"));
+builder.Services.AddSingleton<IReadOnlyList<AuthorizationTokenHeaderRoute>>(authorizationTokenHeaderRoutes);
 
 builder.Services.AddAuthentication(options =>
 {
@@ -116,6 +140,7 @@ app.Use(async (context, next) =>
 
     await next();
 });
+app.UseMiddleware<AuthorizationTokenHeaderMiddleware>();
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapGet("/_diag/ping", () => Results.Ok(new { Status = "ok" })).AllowAnonymous();
