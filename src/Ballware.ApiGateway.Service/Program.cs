@@ -116,7 +116,8 @@ builder.Services.AddCors(options =>
 builder.Services.AddReverseProxy()
     .LoadFromConfig(builder.Configuration.GetSection("ReverseProxy"))
     .AddTransformFactory<CustomHeaderFromClaimTransformFactory>()
-    .AddTransformFactory<AuthorizationTokenToHeaderTransformFactory>();
+    .AddTransformFactory<AuthorizationTokenToHeaderTransformFactory>()
+    .AddTransformFactory<JsonBodyPropertyTransformFactory>();
 
 
 var app = builder.Build();
