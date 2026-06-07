@@ -1,16 +1,18 @@
-using System.Net.Http.Headers;
 using Yarp.ReverseProxy.Transforms;
 using Yarp.ReverseProxy.Transforms.Builder;
 
 namespace Ballware.ApiGateway.Service.Transforms;
 
-public sealed class AuthorizationHeaderFromClaimTransformFactory : ITransformFactory
+public sealed class CustomHeaderFromClaimTransformFactory : ITransformFactory
 {
+    private const string TransformKey = "CustomHeaderFromClaim";
+    private const string HeaderKey = "CustomHeaderFromClaimHeader";
+
     public bool Validate(
         TransformRouteValidationContext context,
         IReadOnlyDictionary<string, string> transformValues)
     {
-        if (!transformValues.TryGetValue("AuthorizationHeaderFromClaim", out var claimType))
+        if (!transformValues.TryGetValue(TransformKey, out var claimType))
         {
             return false;
         }
@@ -18,7 +20,15 @@ public sealed class AuthorizationHeaderFromClaimTransformFactory : ITransformFac
         if (string.IsNullOrWhiteSpace(claimType))
         {
             context.Errors.Add(new ArgumentException(
-                "A non-empty claim type is required for AuthorizationHeaderFromClaim.",
+                "A non-empty claim type is required for CustomHeaderFromClaim.",
+                nameof(transformValues)));
+        }
+
+        if (!transformValues.TryGetValue(HeaderKey, out var headerName) ||
+            string.IsNullOrWhiteSpace(headerName))
+        {
+            context.Errors.Add(new ArgumentException(
+                "A non-empty header name is required for CustomHeaderFromClaimHeader.",
                 nameof(transformValues)));
         }
 
@@ -29,12 +39,12 @@ public sealed class AuthorizationHeaderFromClaimTransformFactory : ITransformFac
         TransformBuilderContext context,
         IReadOnlyDictionary<string, string> transformValues)
     {
-        if (!transformValues.TryGetValue("AuthorizationHeaderFromClaim", out var claimType))
+        if (!transformValues.TryGetValue(TransformKey, out var claimType))
         {
             return false;
         }
 
-        var scheme = transformValues.GetValueOrDefault("AuthorizationScheme", "Bearer");
+        var headerName = transformValues[HeaderKey];
 
         context.AddRequestTransform(transformContext =>
         {
@@ -46,9 +56,8 @@ public sealed class AuthorizationHeaderFromClaimTransformFactory : ITransformFac
                 return ValueTask.CompletedTask;
             }
 
-            transformContext.ProxyRequest.Headers.Authorization = string.IsNullOrWhiteSpace(scheme)
-                ? new AuthenticationHeaderValue(claimValue)
-                : new AuthenticationHeaderValue(scheme, claimValue);
+            transformContext.ProxyRequest.Headers.Remove(headerName);
+            transformContext.ProxyRequest.Headers.TryAddWithoutValidation(headerName, claimValue);
 
             return ValueTask.CompletedTask;
         });

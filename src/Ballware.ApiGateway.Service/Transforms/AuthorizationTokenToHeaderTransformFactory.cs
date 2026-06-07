@@ -5,6 +5,9 @@ namespace Ballware.ApiGateway.Service.Transforms;
 
 public sealed class AuthorizationTokenToHeaderTransformFactory : ITransformFactory
 {
+    private const string TokenFormat = "Token";
+    private const string BearerFormat = "Bearer";
+
     public bool Validate(
         TransformRouteValidationContext context,
         IReadOnlyDictionary<string, string> transformValues)
@@ -21,6 +24,15 @@ public sealed class AuthorizationTokenToHeaderTransformFactory : ITransformFacto
                 nameof(transformValues)));
         }
 
+        if (transformValues.TryGetValue("AuthorizationTokenToHeaderFormat", out var format) &&
+            !string.Equals(format, TokenFormat, StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(format, BearerFormat, StringComparison.OrdinalIgnoreCase))
+        {
+            context.Errors.Add(new ArgumentException(
+                $"AuthorizationTokenToHeaderFormat must be either '{TokenFormat}' or '{BearerFormat}'.",
+                nameof(transformValues)));
+        }
+
         return true;
     }
 
@@ -32,6 +44,8 @@ public sealed class AuthorizationTokenToHeaderTransformFactory : ITransformFacto
         {
             return false;
         }
+
+        var format = transformValues.GetValueOrDefault("AuthorizationTokenToHeaderFormat", TokenFormat);
 
         context.AddRequestTransform(transformContext =>
         {
@@ -54,7 +68,11 @@ public sealed class AuthorizationTokenToHeaderTransformFactory : ITransformFacto
             }
 
             transformContext.ProxyRequest.Headers.Remove(headerName);
-            transformContext.ProxyRequest.Headers.TryAddWithoutValidation(headerName, token);
+            transformContext.ProxyRequest.Headers.TryAddWithoutValidation(
+                headerName,
+                string.Equals(format, BearerFormat, StringComparison.OrdinalIgnoreCase)
+                    ? $"{bearerPrefix}{token}"
+                    : token);
 
             return ValueTask.CompletedTask;
         });
