@@ -237,7 +237,34 @@ static string BuildDefaultResource(HttpContext context)
         ? path[WellKnownPath.Length..]
         : string.Empty;
 
-    return $"{context.Request.Scheme}://{context.Request.Host}{resourcePath}";
+    return $"{GetPublicScheme(context)}://{GetPublicHost(context)}{resourcePath}";
+}
+
+static string GetPublicScheme(HttpContext context)
+{
+    var forwardedProto = GetFirstForwardedHeaderValue(context, "X-Forwarded-Proto");
+
+    return string.IsNullOrWhiteSpace(forwardedProto)
+        ? context.Request.Scheme
+        : forwardedProto;
+}
+
+static HostString GetPublicHost(HttpContext context)
+{
+    var forwardedHost = GetFirstForwardedHeaderValue(context, "X-Forwarded-Host");
+
+    return string.IsNullOrWhiteSpace(forwardedHost)
+        ? context.Request.Host
+        : new HostString(forwardedHost);
+}
+
+static string? GetFirstForwardedHeaderValue(HttpContext context, string headerName)
+{
+    var headerValue = context.Request.Headers[headerName].ToString();
+
+    return string.IsNullOrWhiteSpace(headerValue)
+        ? null
+        : headerValue.Split(',', 2)[0].Trim();
 }
 
 static Dictionary<string, JsonElement>? BuildJsonExtensionData(IConfigurationSection section)
