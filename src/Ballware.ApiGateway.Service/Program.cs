@@ -6,6 +6,8 @@ using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.IdentityModel.Logging;
 using Microsoft.IdentityModel.Tokens;
 using Serilog;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -33,8 +35,9 @@ if (authorizationOptions == null)
     throw new ConfigurationException("Required configuration for authorization is missing");
 }
 
-var authorizationTokenHeaderRoutes = builder.Configuration
-    .GetSection("ReverseProxy:Routes")
+var reverseProxyRoutesSection = builder.Configuration.GetSection("ReverseProxy:Routes");
+
+var authorizationTokenHeaderRoutes = reverseProxyRoutesSection
     .GetChildren()
     .Select(routeSection =>
     {
@@ -55,8 +58,35 @@ var authorizationTokenHeaderRoutes = builder.Configuration
     .OfType<AuthorizationTokenHeaderRoute>()
     .ToArray();
 
+var oauthProtectedResourceRoutes = builder.Configuration.GetSection("OAuthProtectedResourceRoutes")
+    .GetChildren()
+    .Select(routeSection =>
+    {
+        var metadataSection = routeSection.GetSection("OAuthProtectedResource");
+
+        if (!metadataSection.Exists())
+        {
+            return null;
+        }
+
+        var path = routeSection.GetSection("Match").GetValue<string>("Path");
+
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return null;
+        }
+
+        return new OAuthProtectedResourceRoute(
+            new PathString(path.TrimEnd('/')),
+            metadataSection.Get<OAuthProtectedResourceOptions>() ?? new OAuthProtectedResourceOptions(),
+            metadataSection);
+    })
+    .OfType<OAuthProtectedResourceRoute>()
+    .ToArray();
+
 builder.Services.Configure<KestrelServerOptions>(builder.Configuration.GetSection("Kestrel"));
 builder.Services.AddSingleton<IReadOnlyList<AuthorizationTokenHeaderRoute>>(authorizationTokenHeaderRoutes);
+builder.Services.AddSingleton<IReadOnlyList<OAuthProtectedResourceRoute>>(oauthProtectedResourceRoutes);
 
 builder.Services.AddAuthentication(options =>
 {
@@ -129,6 +159,7 @@ app.UseSerilogRequestLogging(options =>
     options.MessageTemplate = "HTTP {RequestMethod} {RequestPath} => {StatusCode} in {Elapsed:0.0000} ms";
 });
 
+app.UseRouting();
 app.UseCors();
 app.UseWebSockets();
 app.Use(async (context, next) =>
@@ -145,6 +176,111 @@ app.UseMiddleware<AuthorizationTokenHeaderMiddleware>();
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapGet("/_diag/ping", () => Results.Ok(new { Status = "ok" })).AllowAnonymous();
+
+app.MapGet("/.well-known/oauth-protected-resource", CreateOAuthProtectedResourceMetadata).AllowAnonymous();
+app.MapGet("/.well-known/oauth-protected-resource/{**resourcePath}", CreateOAuthProtectedResourceMetadata).AllowAnonymous();
+
 app.MapReverseProxy();
 
 await app.RunAsync();
+
+IResult CreateOAuthProtectedResourceMetadata(
+    HttpContext context,
+    IReadOnlyList<OAuthProtectedResourceRoute> routes)
+{
+    var route = routes.FirstOrDefault(route => context.Request.Path.Equals(route.Path, StringComparison.OrdinalIgnoreCase));
+
+    if (route == null && context.Request.Path != "/.well-known/oauth-protected-resource")
+    {
+        return Results.NotFound();
+    }
+
+    var options = route?.Options ?? new OAuthProtectedResourceOptions();
+    var metadataSection = route?.MetadataSection;
+    var resource = !string.IsNullOrWhiteSpace(options.Resource)
+        ? options.Resource
+        : BuildDefaultResource(context);
+
+    var authorizationServers = options.AuthorizationServers is { Length: > 0 }
+        ? options.AuthorizationServers
+        : [authorizationOptions.Authority];
+
+    var metadata = new OAuthProtectedResourceMetadata
+    {
+        Resource = resource,
+        AuthorizationServers = authorizationServers,
+        ScopesSupported = options.ScopesSupported,
+        BearerMethodsSupported = route == null
+            ? null
+            : options.BearerMethodsSupported is { Length: > 0 }
+                ? options.BearerMethodsSupported.Distinct(StringComparer.OrdinalIgnoreCase).ToArray()
+                : ["header"],
+        ResourceName = options.ResourceName,
+        ResourceDocumentation = options.ResourceDocumentation,
+        ResourcePolicyUri = options.ResourcePolicyUri,
+        ResourceTosUri = options.ResourceTosUri,
+        JwksUri = options.JwksUri,
+        AdditionalMetadata = metadataSection == null
+            ? null
+            : BuildJsonExtensionData(metadataSection.GetSection("AdditionalMetadata"))
+    };
+
+    return Results.Json(metadata);
+}
+
+static string BuildDefaultResource(HttpContext context)
+{
+    const string WellKnownPath = "/.well-known/oauth-protected-resource";
+
+    var path = context.Request.Path.Value ?? string.Empty;
+    var resourcePath = path.StartsWith(WellKnownPath, StringComparison.OrdinalIgnoreCase)
+        ? path[WellKnownPath.Length..]
+        : string.Empty;
+
+    return $"{context.Request.Scheme}://{context.Request.Host}{resourcePath}";
+}
+
+static Dictionary<string, JsonElement>? BuildJsonExtensionData(IConfigurationSection section)
+{
+    var children = section.GetChildren().ToArray();
+
+    if (children.Length == 0)
+    {
+        return null;
+    }
+
+    return children.ToDictionary(
+        child => child.Key,
+        child => JsonSerializer.SerializeToElement(BuildJsonNode(child)));
+}
+
+static JsonNode? BuildJsonNode(IConfigurationSection section)
+{
+    var children = section.GetChildren().ToArray();
+
+    if (children.Length == 0)
+    {
+        return section.Value is null ? null : JsonValue.Create(section.Value);
+    }
+
+    if (children.Select(child => child.Key).All(key => int.TryParse(key, out _)))
+    {
+        var array = new JsonArray();
+
+        foreach (var child in children.OrderBy(child => int.Parse(child.Key)))
+        {
+            array.Add(BuildJsonNode(child));
+        }
+
+        return array;
+    }
+
+    var obj = new JsonObject();
+
+    foreach (var child in children)
+    {
+        obj[child.Key] = BuildJsonNode(child);
+    }
+
+    return obj;
+}
