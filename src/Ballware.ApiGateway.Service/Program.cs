@@ -178,6 +178,13 @@ app.UseAuthorization();
 app.MapGet("/_diag/ping", () => Results.Ok(new { Status = "ok" })).AllowAnonymous();
 
 app.MapGet("/.well-known/oauth-protected-resource", CreateOAuthProtectedResourceMetadata).AllowAnonymous();
+
+foreach (var route in oauthProtectedResourceRoutes)
+{
+    app.MapGet(route.Path.Value!, (HttpContext context) => CreateOAuthProtectedResourceMetadataForRoute(context, route))
+        .AllowAnonymous();
+}
+
 app.MapGet("/.well-known/oauth-protected-resource/{**resourcePath}", CreateOAuthProtectedResourceMetadata).AllowAnonymous();
 
 app.MapReverseProxy();
@@ -195,8 +202,21 @@ IResult CreateOAuthProtectedResourceMetadata(
         return Results.NotFound();
     }
 
+    return Results.Json(BuildOAuthProtectedResourceMetadata(context, route));
+}
+
+IResult CreateOAuthProtectedResourceMetadataForRoute(
+    HttpContext context,
+    OAuthProtectedResourceRoute route)
+{
+    return Results.Json(BuildOAuthProtectedResourceMetadata(context, route));
+}
+
+OAuthProtectedResourceMetadata BuildOAuthProtectedResourceMetadata(
+    HttpContext context,
+    OAuthProtectedResourceRoute? route)
+{
     var options = route?.Options ?? new OAuthProtectedResourceOptions();
-    var metadataSection = route?.MetadataSection;
     var resource = !string.IsNullOrWhiteSpace(options.Resource)
         ? options.Resource
         : BuildDefaultResource(context);
@@ -220,12 +240,12 @@ IResult CreateOAuthProtectedResourceMetadata(
         ResourcePolicyUri = options.ResourcePolicyUri,
         ResourceTosUri = options.ResourceTosUri,
         JwksUri = options.JwksUri,
-        AdditionalMetadata = metadataSection == null
+        AdditionalMetadata = route == null
             ? null
-            : BuildJsonExtensionData(metadataSection.GetSection("AdditionalMetadata"))
+            : BuildJsonExtensionData(route.MetadataSection.GetSection("AdditionalMetadata"))
     };
 
-    return Results.Json(metadata);
+    return metadata;
 }
 
 static string BuildDefaultResource(HttpContext context)
